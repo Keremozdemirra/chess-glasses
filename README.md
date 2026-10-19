@@ -42,7 +42,7 @@ It installs Stockfish, whisper.cpp, ffmpeg and the BlackHole 2ch virtual audio d
 4. Double-press the capture button on the glasses so the call shows their camera.
 5. Look at the whole board for a few seconds. You hear which colour you play and, when it is your turn, the move.
 
-Keep the call window visible on the Mac and the Mac unlocked. A minimised or covered browser window, or a locked screen, stops drawing video.
+Keep the call window visible on the Mac and the Mac unlocked. A minimised or covered browser window stops drawing video, and a locked screen is likely to as well (not yet tested).
 
 ## How a move is read
 
