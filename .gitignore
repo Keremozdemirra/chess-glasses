@@ -1,0 +1,7 @@
+.venv/
+models/
+testdata/
+__pycache__/
+.pytest_cache/
+*.wav
+*.png
