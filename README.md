@@ -32,15 +32,17 @@ It installs Stockfish, whisper.cpp, ffmpeg and the BlackHole 2ch virtual audio d
 2. Start the coach:
 
    ```sh
-   .venv/bin/python chessvoice.py --watch --out-device "BlackHole 2ch"
+   tools/go.sh
    ```
+
+   It keeps the display awake while the coach runs, brings Chrome forward and starts watch mode (`chessvoice.py --watch --out-device "BlackHole 2ch"`). Extra flags are passed through.
 
    It sets the Mac's input to BlackHole, unmuted, before anything else. macOS falls back to the built-in microphone after a restart. The first run asks for Screen Recording permission for your terminal app; allow it in System Settings, Privacy & Security, then start the coach again. Without it the captured frames are blank.
 3. From your phone's Instagram, video call the second account and answer on the Mac. If the call screen says another microphone is connected, open its gear menu and pick BlackHole 2ch.
 4. Double-press the capture button on the glasses so the call shows their camera.
 5. Look at the whole board for a few seconds. You hear which colour you play and, when it is your turn, the move.
 
-Keep the call window visible on the Mac. A minimised or covered browser window stops drawing video.
+Keep the call window visible on the Mac and the Mac unlocked. A minimised or covered browser window, or a locked screen, stops drawing video.
 
 ## How a move is read
 
