@@ -187,17 +187,29 @@ def _watcher():
     return Watcher(_Args(), Quiet()), said
 
 
-def test_watcher_needs_two_agreeing_reads_then_suggests():
+def test_watcher_commits_exact_read_at_once():
     w, said = _watcher()
     w.step((chess.BLACK, seen_of(chess.Board())))
     assert w.me == chess.BLACK and said == ["Ready. You play black."]
     after = chess.Board()
     after.push_san("d4")
     w.step((chess.BLACK, seen_of(after)))
-    assert not w.board.move_stack                     # one read is not enough
-    w.step((chess.BLACK, seen_of(after)))
     assert [m.uci() for m in w.board.move_stack] == ["d2d4"]
     assert said[-1].startswith("Play ")
+    w.engine.quit()
+
+
+def test_watcher_waits_for_second_read_when_squares_are_misread():
+    w, _ = _watcher()
+    w.step((chess.BLACK, seen_of(chess.Board())))
+    after = chess.Board()
+    after.push_san("d4")
+    noisy = seen_of(after)
+    noisy.pop(chess.H2)                               # hidden by a hand
+    w.step((chess.BLACK, noisy))
+    assert not w.board.move_stack                     # one noisy read is not enough
+    w.step((chess.BLACK, noisy))
+    assert [m.uci() for m in w.board.move_stack] == ["d2d4"]
     w.engine.quit()
 
 

@@ -357,13 +357,29 @@ def view_to_map(rows, near):
     return seen
 
 
+def shrink(image, longest=1024):
+    """A 1024 px frame reads as well as the 1800 px original and uploads faster."""
+    out = image + ".small.png"
+    r = subprocess.run(["sips", "-Z", str(longest), image, "--out", out],
+                       capture_output=True, check=False)
+    return out if r.returncode == 0 and os.path.exists(out) else image
+
+
 def read_view(image, model):
     """Returns (near_colour, {square: symbol}) or None."""
     import json
+    small = shrink(image)
+    # Plugins, MCP servers, hooks and settings are skipped: they cost five
+    # seconds of start-up per read and a board read needs none of them.
     out = subprocess.run(
-        ["claude", "-p", VIEW_PROMPT.format(image=image), "--model", model,
-         "--allowedTools=Read"],
-        capture_output=True, text=True, check=False, timeout=120)
+        ["claude", "-p", VIEW_PROMPT.format(image=small), "--model", model,
+         "--tools", "Read", "--allowedTools=Read", "--strict-mcp-config",
+         "--disable-slash-commands", "--no-chrome", "--no-session-persistence",
+         "--setting-sources", ""],
+        capture_output=True, text=True, check=False, timeout=120,
+        cwd=tempfile.gettempdir())
+    if small != image:
+        os.remove(small)
     m = re.search(r"\{.*\}", out.stdout, re.S)
     if not m:
         return None
@@ -581,7 +597,9 @@ class Watcher:
             self.candidate = None
             return
         key = [m.uci() for m in moves]
-        if key != self.candidate:
+        # A read that matches a legal position square for square is trusted at
+        # once; only a read with misread squares waits for a second opinion.
+        if key != self.candidate and score > 0:
             self.candidate = key
             print(f"  saw {' '.join(key)}, waiting for a second read", flush=True)
             return
@@ -603,33 +621,52 @@ def pin_call_input(device):
 
 
 def watch(args, speaker):
+    """Two reads are kept in flight, started half a read apart, so the board
+    is looked at twice as often as one read takes. Results are applied in the
+    order the frames were taken; a frame older than one already applied is
+    dropped."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
     if args.out_device:
         pin_call_input(args.out_device)
     w = Watcher(args, speaker)
-    path = os.path.join(tempfile.gettempdir(), "chessvoice-watch.png")
-    try:
-        while True:
-            t0 = time.time()
-            if args.frame:
-                path = args.frame
-            elif not capture_frame(path, args.window):
-                print("  no call window", flush=True)
-                time.sleep(3)
-                continue
-            try:
-                view = read_view(path, args.vision_model)
-            finally:
-                if not args.frame and os.path.exists(path):
-                    os.remove(path)
+    lock = threading.Lock()
+    state = {"applied": 0.0, "seq": 0}
+
+    def one(taken, path):
+        t0 = time.time()
+        try:
+            view = read_view(path, args.vision_model)
+        finally:
+            if not args.frame and os.path.exists(path):
+                os.remove(path)
+        with lock:
             print(f"read in {time.time() - t0:.1f}s", flush=True)
+            if taken < state["applied"]:
+                return
+            state["applied"] = taken
             if view is None:
                 print("  board not readable", flush=True)
             else:
                 w.step(view)
-            time.sleep(max(0.0, args.interval - (time.time() - t0)))
+
+    pool = ThreadPoolExecutor(max_workers=args.parallel)
+    try:
+        while True:
+            state["seq"] += 1
+            path = args.frame or os.path.join(
+                tempfile.gettempdir(), f"chessvoice-watch-{state['seq']}.png")
+            if not args.frame and not capture_frame(path, args.window):
+                print("  no call window", flush=True)
+                time.sleep(3)
+                continue
+            pool.submit(one, time.time(), path)
+            time.sleep(args.interval)
     except KeyboardInterrupt:
         pass
     finally:
+        pool.shutdown(wait=False, cancel_futures=True)
         w.engine.quit()
 
 
@@ -649,8 +686,10 @@ def main():
                     help="regex for the call window's app or title")
     ap.add_argument("--watch", action="store_true",
                     help="read moves from the camera; no listening")
-    ap.add_argument("--interval", type=float, default=4.0,
-                    help="watch mode: least seconds between board reads")
+    ap.add_argument("--interval", type=float, default=3.0,
+                    help="watch mode: seconds between frames sent for reading")
+    ap.add_argument("--parallel", type=int, default=2,
+                    help="watch mode: board reads in flight at once")
     ap.add_argument("--type", action="store_true", help="type commands instead of speaking")
     args = ap.parse_args()
 
