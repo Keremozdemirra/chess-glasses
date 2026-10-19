@@ -1,8 +1,9 @@
-"""Voice chess assistant for camera glasses on a WhatsApp call.
+"""Chess coach for camera glasses on a video call.
 
-Call audio comes in on one device, spoken replies go out on another, so the
-assistant never hears itself. Moves are tracked by voice; "look" reads the
-board from the WhatsApp video window when the tracked game drifts.
+Watch mode reads the board from the call window and speaks the engine's move
+into the call. Voice mode listens for spoken moves instead; call audio comes in
+on one device and replies go out on another, so it never hears itself, and
+"look" reads the board from the call window when the tracked game drifts.
 """
 
 import argparse
@@ -66,7 +67,7 @@ PHRASES = {
         "undone": "Undone.",
         "looking": "Looking.",
         "no_board": "I could not read the board.",
-        "no_window": "No WhatsApp video window.",
+        "no_window": "No call window.",
         "check": ", check",
         "takes": "takes",
         "short": "castle short", "long": "castle long",
@@ -86,7 +87,7 @@ PHRASES = {
         "undone": "Geri alindi.",
         "looking": "Bakiyorum.",
         "no_board": "Tahtayi okuyamadim.",
-        "no_window": "WhatsApp goruntu penceresi yok.",
+        "no_window": "Arama penceresi yok.",
         "check": ", sah",
         "takes": "alir",
         "short": "kisa rok", "long": "uzun rok",
