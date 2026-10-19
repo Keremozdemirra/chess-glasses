@@ -46,9 +46,9 @@ Keep the call window visible on the Mac. A minimised or covered browser window s
 
 Every few seconds the call window is captured and Claude reports the board as the camera sees it, far row first, plus which colour sits nearest. The rotation to board squares happens in code, since a model asked to rotate a black-side view tends to mirror it.
 
-A read is then explained as zero, one or two legal moves from the tracked game, forgiving up to two misread squares. A move counts only when two reads in a row agree, so a hand over the board changes nothing. After four reads that no legal move explains, and only if two of them match, the coach trusts the camera and resyncs. Setting the pieces up again starts a new game.
+A read is then explained as zero, one or two legal moves from the tracked game, forgiving up to two misread squares. A read that matches a legal position square for square is accepted at once; one with misread squares counts only when the next read agrees, so a hand over the board changes nothing. After four reads that no legal move explains, and only if two of them match, the coach trusts the camera and resyncs. Setting the pieces up again starts a new game.
 
-Each read takes about 7 to 15 seconds, so a move is announced 15 to 30 seconds after it is played.
+A frame goes out every 3 seconds with two reads in flight. In the live test on 2026-10-19 one read took 9 to 17 seconds, so a clean read announces a move within roughly that time, and a blurry one waits for the next.
 
 ## Voice mode
 
