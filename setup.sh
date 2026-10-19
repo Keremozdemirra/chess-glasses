@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")"
 
 brew install stockfish whisper-cpp ffmpeg
-brew install --cask blackhole-2ch blackhole-16ch
+brew install --cask blackhole-2ch
 swiftc -O tools/setinput.swift -o tools/setinput
 
 python3 -m venv .venv
@@ -23,4 +23,4 @@ fetch ggml-silero-v5.1.2.bin \
   https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin \
   29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf
 
-echo "Done. Run: .venv/bin/python chessvoice.py --in-device 'BlackHole 16ch' --out-device 'BlackHole 2ch'"
+echo "Done. Run: .venv/bin/python chessvoice.py --watch --out-device 'BlackHole 2ch'"

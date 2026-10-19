@@ -15,7 +15,7 @@ Only the Mac needs to be on. The phone stays in your pocket.
 ## What you need
 
 - Camera glasses paired with your phone (tested with Ray-Ban Meta).
-- A Mac with Homebrew and the `claude` CLI signed in.
+- A Mac with Homebrew, Python 3.12 or newer, the Xcode command line tools (`xcode-select --install`) and the `claude` CLI signed in. Tested on macOS 26.6 on Apple silicon with Python 3.14.
 - A second Instagram account for the Mac. Instagram allows several accounts per person and signs them up with an email, so no second phone number is needed. One account cannot call itself.
 
 ## Setup
@@ -24,7 +24,7 @@ Only the Mac needs to be on. The phone stays in your pocket.
 ./setup.sh
 ```
 
-It installs Stockfish, whisper.cpp, ffmpeg and the BlackHole virtual audio drivers, creates a Python venv and downloads two speech models checked by SHA-256. BlackHole asks for your Mac password. If BlackHole passes silence afterwards, restart the Mac.
+It installs Stockfish, whisper.cpp, ffmpeg and the BlackHole 2ch virtual audio driver, creates a Python venv and downloads two speech models checked by SHA-256. BlackHole asks for your Mac password. If BlackHole passes silence afterwards, restart the Mac.
 
 ## Play
 
@@ -35,7 +35,7 @@ It installs Stockfish, whisper.cpp, ffmpeg and the BlackHole virtual audio drive
    .venv/bin/python chessvoice.py --watch --out-device "BlackHole 2ch"
    ```
 
-   It sets the Mac's input to BlackHole, unmuted, before anything else. macOS falls back to the built-in microphone after a restart.
+   It sets the Mac's input to BlackHole, unmuted, before anything else. macOS falls back to the built-in microphone after a restart. The first run asks for Screen Recording permission for your terminal app; allow it in System Settings, Privacy & Security, then start the coach again. Without it the captured frames are blank.
 3. From your phone's Instagram, video call the second account and answer on the Mac. If the call screen says another microphone is connected, open its gear menu and pick BlackHole 2ch.
 4. Double-press the capture button on the glasses so the call shows their camera.
 5. Look at the whole board for a few seconds. You hear which colour you play and, when it is your turn, the move.
@@ -52,7 +52,7 @@ A frame goes out every 3 seconds with two reads in flight. In the live test on 2
 
 ## Voice mode
 
-Without `--watch` the coach listens instead of looking: say the opponent's move (`e5`, `knight f6`, `castle short`), say `done` after playing the suggestion. Speech is transcribed on the Mac by whisper.cpp with Silero voice detection. Run `.venv/bin/python chessvoice.py -h` for the flags.
+Without `--watch` the coach listens instead of looking (for listening to a call, also install `blackhole-16ch` and pass `--in-device "BlackHole 16ch"`): say the opponent's move (`e5`, `knight f6`, `castle short`), say `done` after playing the suggestion. Speech is transcribed on the Mac by whisper.cpp with Silero voice detection. Run `.venv/bin/python chessvoice.py -h` for the flags.
 
 ## What leaves the Mac
 
