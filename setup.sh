@@ -6,6 +6,7 @@ cd "$(dirname "$0")"
 
 brew install stockfish whisper-cpp ffmpeg
 brew install --cask blackhole-2ch blackhole-16ch
+swiftc -O tools/setinput.swift -o tools/setinput
 
 python3 -m venv .venv
 .venv/bin/pip install -q -r requirements.txt

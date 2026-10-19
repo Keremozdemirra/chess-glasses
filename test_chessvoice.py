@@ -102,3 +102,119 @@ def test_gate_and_vad_in_noise():
     burst = np.concatenate([noise(16000), noise(24000) * 8, noise(32000)]).astype(np.int16)
     kind, _ = parse_command(transcribe(_feed(burst), "en"))
     assert kind in (None, "move"), kind
+
+
+# --- watch mode: moves inferred from camera reads ---
+
+from chessvoice import infer_moves, view_to_map, Watcher
+
+
+def seen_of(board):
+    return {sq: p.symbol() for sq, p in board.piece_map().items()}
+
+
+def rows_as_seen(board, near):
+    """What a player on the `near` side sees: far edge first, left to right."""
+    rows = []
+    for i in range(8):
+        row = ""
+        for j in range(8):
+            sq = chess.square(j, 7 - i) if near == chess.WHITE else chess.square(7 - j, i)
+            p = board.piece_at(sq)
+            row += p.symbol() if p else "."
+        rows.append(row)
+    return rows
+
+
+def test_view_rotation_for_both_sides():
+    b = chess.Board("r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3")
+    for near in (chess.WHITE, chess.BLACK):
+        assert view_to_map(rows_as_seen(b, near), near) == seen_of(b)
+    # From black's chair white's king is on the far row, fourth from the left.
+    assert rows_as_seen(chess.Board(), chess.BLACK)[0] == "RNBKQBNR"
+
+
+def test_infers_one_move_through_two_misread_squares():
+    b = chess.Board()
+    after = b.copy()
+    after.push_san("e4")
+    seen = seen_of(after)
+    seen[chess.A7] = "P"          # wrong colour
+    seen.pop(chess.H2)            # hidden by a hand
+    moves, score = infer_moves(b, seen)
+    assert [m.uci() for m in moves] == ["e2e4"] and score == 2
+
+
+def test_infers_both_plies_when_a_read_was_missed():
+    b = chess.Board()
+    after = b.copy()
+    for san in ("e4", "c5"):
+        after.push_san(san)
+    moves, _ = infer_moves(b, seen_of(after))
+    assert [m.uci() for m in moves] == ["e2e4", "c7c5"]
+
+
+def test_castling_and_capture_are_recognised():
+    b = chess.Board("r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4")
+    after = b.copy()
+    after.push_san("O-O")
+    assert [m.uci() for m in infer_moves(b, seen_of(after))[0]] == ["e1g1"]
+    b = chess.Board("rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2")
+    after = b.copy()
+    after.push_san("exd5")
+    assert [m.uci() for m in infer_moves(b, seen_of(after))[0]] == ["e4d5"]
+
+
+def test_garbage_read_is_not_a_move():
+    b = chess.Board()
+    seen = seen_of(b)
+    for sq in (chess.D2, chess.E2, chess.F2, chess.D7, chess.E7):
+        seen.pop(sq)                # a hand across the middle of the board
+    moves, _ = infer_moves(b, seen)
+    assert moves is None
+
+
+class _Args:
+    lang, skill, think = "en", 20, 0.2
+
+
+def _watcher():
+    said = []
+
+    class Quiet:
+        def say(self, t):
+            said.append(t)
+    return Watcher(_Args(), Quiet()), said
+
+
+def test_watcher_needs_two_agreeing_reads_then_suggests():
+    w, said = _watcher()
+    w.step((chess.BLACK, seen_of(chess.Board())))
+    assert w.me == chess.BLACK and said == ["Ready. You play black."]
+    after = chess.Board()
+    after.push_san("d4")
+    w.step((chess.BLACK, seen_of(after)))
+    assert not w.board.move_stack                     # one read is not enough
+    w.step((chess.BLACK, seen_of(after)))
+    assert [m.uci() for m in w.board.move_stack] == ["d2d4"]
+    assert said[-1].startswith("Play ")
+    w.engine.quit()
+
+
+def test_watcher_suggests_at_once_when_player_is_white():
+    w, said = _watcher()
+    w.step((chess.WHITE, seen_of(chess.Board())))
+    assert said[0] == "Ready. You play white." and said[1].startswith("Play ")
+    w.engine.quit()
+
+
+def test_watcher_resyncs_only_on_a_repeated_bad_read():
+    w, _ = _watcher()
+    w.step((chess.WHITE, seen_of(chess.Board())))
+    far = chess.Board("r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/3P1N2/PPP2PPP/RNBQK2R w KQkq - 1 5")
+    for _ in range(3):
+        w.step((chess.WHITE, seen_of(far)))
+    assert not w.board.move_stack and w.board.board_fen() == chess.Board().board_fen()
+    w.step((chess.WHITE, seen_of(far)))
+    assert w.board.board_fen() == far.board_fen()
+    w.engine.quit()

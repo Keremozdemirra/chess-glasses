@@ -1,61 +1,73 @@
 # chess-glasses
 
-A voice chess coach for camera glasses without a display. You wear the glasses, call your Mac on WhatsApp, say your opponent's move, and Stockfish's reply is spoken into your ear.
+A chess coach for camera glasses without a display. The glasses call a Mac at home over Instagram, the Mac reads the board from the call video, and Stockfish's move is spoken into your ear.
 
 ```
-glasses mic ──WhatsApp call──▶ Mac ──▶ whisper.cpp ──▶ move parser ──▶ Stockfish
-glasses ear ◀──WhatsApp call── Mac ◀── macOS say ◀──────────────────────┘
-glasses camera ──video──▶ WhatsApp window ──"look"──▶ Claude reads the board (optional)
+glasses camera ──Instagram video call──▶ Mac (Chrome) ──screenshot──▶ Claude reads the board
+                                                                        │
+                                              legal-move matcher ◀──────┘
+                                                      │
+glasses ear ◀──Instagram call── BlackHole mic ◀── say ◀── Stockfish
 ```
 
-Speech recognition and the engine run on the Mac. Two BlackHole virtual audio devices keep the directions apart, so the coach never hears its own voice.
+Only the Mac needs to be on. The phone stays in your pocket.
 
-## Setup (macOS, Apple silicon)
+## What you need
+
+- Camera glasses paired with your phone (tested with Ray-Ban Meta).
+- A Mac with Homebrew and the `claude` CLI signed in.
+- A second Instagram account for the Mac. Instagram allows several accounts per person and signs them up with an email, so no second phone number is needed. One account cannot call itself.
+
+## Setup
 
 ```sh
 ./setup.sh
 ```
 
-It installs Stockfish, whisper.cpp, ffmpeg and the two BlackHole drivers with Homebrew, creates a Python venv, and downloads two models from Hugging Face, checked by SHA-256: whisper `small` (q5_1) and the Silero voice-activity model.
+It installs Stockfish, whisper.cpp, ffmpeg and the BlackHole virtual audio drivers, creates a Python venv and downloads two speech models checked by SHA-256. BlackHole asks for your Mac password. If BlackHole passes silence afterwards, restart the Mac.
 
-In WhatsApp on the Mac, open Settings, then Calls:
+## Play
 
-| Setting | Device |
-|---|---|
-| Microphone | BlackHole 2ch |
-| Speaker | BlackHole 16ch |
+1. On the Mac, open instagram.com in **Google Chrome** and sign in with the second account. Safari puts its own echo cancellation on the microphone and sends silence from a virtual one.
+2. Start the coach:
 
-The glasses call from your phone's WhatsApp account, so the Mac needs a second account to answer. An account cannot call itself.
+   ```sh
+   .venv/bin/python chessvoice.py --watch --out-device "BlackHole 2ch"
+   ```
 
-## Run
+   It sets the Mac's input to BlackHole, unmuted, before anything else. macOS falls back to the built-in microphone after a restart.
+3. From your phone's Instagram, video call the second account and answer on the Mac. If the call screen says another microphone is connected, open its gear menu and pick BlackHole 2ch.
+4. Double-press the capture button on the glasses so the call shows their camera.
+5. Look at the whole board for a few seconds. You hear which colour you play and, when it is your turn, the move.
 
-```sh
-.venv/bin/python chessvoice.py --color white \
-  --in-device "BlackHole 16ch" --out-device "BlackHole 2ch"
-```
+Keep the call window visible on the Mac. A minimised or covered browser window stops drawing video.
 
-Without the device flags it uses the Mac's own microphone and speakers, which is handy for a dry run. `--type` takes commands from the keyboard.
+## How a move is read
 
-## What to say
+Every few seconds the call window is captured and Claude reports the board as the camera sees it, far row first, plus which colour sits nearest. The rotation to board squares happens in code, since a model asked to rotate a black-side view tends to mirror it.
 
-| Say | Effect |
-|---|---|
-| `e5`, `knight f6`, `bishop takes c4`, `e takes d5`, `castle short` | the move just played on the board |
-| `done` | you played the move the coach suggested |
-| `undo` | take back the last move |
-| `repeat` | hear the suggestion again |
-| `look` | read the board from the WhatsApp video window and resync |
-| `new game black` | start over as black |
+A read is then explained as zero, one or two legal moves from the tracked game, forgiving up to two misread squares. A move counts only when two reads in a row agree, so a hand over the board changes nothing. After four reads that no legal move explains, and only if two of them match, the coach trusts the camera and resyncs. Setting the pieces up again starts a new game.
 
-Commands also work in Turkish without diacritics (`tamam`, `geri al`, `bak`, `yeni oyun siyah`) with `--lang tr`. Moves are recognised far more reliably in English (`--lang en`).
+Each read takes about 7 to 15 seconds, so a move is announced 15 to 30 seconds after it is played.
 
-Anything without a square or a castling word is ignored, so table talk does not move pieces. After every reply the input is muted for 1.5 s (`--echo-guard`) so the reply, echoed back over the call, is not taken for a move. `ok` and `yes` do not confirm a move: whisper produces them from background noise.
+## Voice mode
+
+Without `--watch` the coach listens instead of looking: say the opponent's move (`e5`, `knight f6`, `castle short`), say `done` after playing the suggestion. Speech is transcribed on the Mac by whisper.cpp with Silero voice detection. Run `.venv/bin/python chessvoice.py -h` for the flags.
 
 ## What leaves the Mac
 
-- The call itself goes through WhatsApp.
-- `look` sends one screenshot of the WhatsApp window to Claude through the `claude` CLI. Anything else visible in that window goes with it. The screenshot is deleted afterwards.
-- Audio is transcribed locally and each clip is deleted after transcription.
+- The call goes through Instagram.
+- Each board read sends one screenshot of the call window to Claude through the `claude` CLI. The file is deleted after the read.
+- Speech in voice mode is transcribed locally.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| `no call window` | The call is in a background tab. Give it its own window. |
+| Coach speaks, you hear nothing | The call is not using BlackHole, or the call was started before the input changed. Start a new call. |
+| `tools/audio_check.py` prints peak 0 | BlackHole is muted. Running the coach unmutes it; a fresh install may need a restart. |
+| You hear nothing from the Mac at all | The phone or glasses side: try a new call and the glasses volume swipe. |
 
 ## Tests
 
@@ -63,13 +75,11 @@ Anything without a square or a castling word is ignored, so table talk does not 
 .venv/bin/python -m pytest -q
 ```
 
-They cover spoken move variants, captures, castling, promotion, the Turkish commands, and the audio path end to end: synthesised speech mixed with noise passes through the voice gate and whisper and must come out as the right move, while a burst of noise must not come out as a command.
-
-Not yet tested: a live call from the glasses, and `look` on a clear frame of a full board.
+They cover the camera-view rotation for both sides, move inference through misread and hidden squares, both plies of a missed read, castling and captures, the two-read confirmation and the resync rule, plus the voice path end to end with synthesised speech in noise.
 
 ## Fair play
 
-Engine help during a rated, online or tournament game is cheating and gets accounts banned. Use this for training, analysis, or games where your opponent knows.
+Engine help in rated, online or tournament games is cheating, and chess sites detect it automatically whatever your opponent agreed to. Use this for training, analysis, or casual games where your opponent knows.
 
 ## Licence
 

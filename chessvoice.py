@@ -293,43 +293,124 @@ def transcribe_file(path, lang):
     return out.stdout.strip()
 
 
-def whatsapp_window():
+CALL_WINDOW = r"instagram"
+
+
+def call_window(pattern=CALL_WINDOW):
+    """Largest on-screen window whose app or title matches; a call popup is
+    usually the biggest one, the inbox tab behind it the second."""
     import Quartz
     opts = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
-    best, area = None, 0
+    best, area, title = None, 0, None
     for w in Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID):
-        if "whatsapp" not in str(w.get("kCGWindowOwnerName", "")).lower():
+        name = f"{w.get('kCGWindowOwnerName', '')} {w.get('kCGWindowName', '')}"
+        if w.get("kCGWindowLayer", 0) != 0 or not re.search(pattern, name, re.I):
             continue
         b = w.get("kCGWindowBounds", {})
         a = b.get("Width", 0) * b.get("Height", 0)
         if a > area:
-            best, area = w.get("kCGWindowNumber"), a
+            best, area, title = w.get("kCGWindowNumber"), a, name
+    if title != getattr(call_window, "last", None):
+        print(f"  watching window: {title}", flush=True)
+        call_window.last = title
     return best
 
 
-def capture_frame(path):
-    wid = whatsapp_window()
+def capture_frame(path, pattern=CALL_WINDOW):
+    wid = call_window(pattern)
     if wid is None:
         return False
     subprocess.run(["screencapture", "-x", "-o", "-l", str(wid), path], check=False)
     return os.path.exists(path) and os.path.getsize(path) > 0
 
 
-def read_board(image, my_color, model):
-    """Ask Claude for the piece placement. The viewer's side is given because a
-    head-mounted camera has no fixed orientation."""
-    side = "white" if my_color == chess.WHITE else "black"
-    prompt = (
-        f"Read the image file {image}. It shows a physical chess board seen from "
-        f"the eyes of the player of the {side} pieces, so the {side} pieces are the "
-        "ones nearest the camera. Ignore any on-screen overlays or arrows. "
-        "Output only the FEN piece-placement field (ranks 8 to 1, white uppercase), "
-        "one line, nothing else. If the board is not readable output NONE.")
+VIEW_PROMPT = (
+    "Read the image file {image}. It is a frame from glasses worn by a chess player "
+    "sitting at a physical board. Ignore any app interface, overlays and hands. "
+    "Report the board exactly as it appears in the image: 8 rows from the far edge "
+    "of the board to the near edge, each row 8 characters from left to right. "
+    "Use . for an empty square, PNBRQK for white pieces, pnbrqk for black pieces. "
+    "Also say which colour's pieces started on the near side (look at where the "
+    "kings and most pieces of each colour sit). Answer with JSON only, no prose: "
+    '{{"near": "white" or "black", "rows": ["8 chars", ... 8 rows]}}. '
+    'If the whole board is not visible, answer {{"error": "reason"}}.')
+
+
+def view_to_map(rows, near):
+    """Turn the camera-view grid into {square: symbol}. The model only reports
+    what it sees; doing the rotation here keeps a black-side view from being
+    mirrored by a model that is bad at mental rotation."""
+    if len(rows) != 8 or any(len(r) != 8 for r in rows):
+        return None
+    seen = {}
+    for i, row in enumerate(rows):
+        for j, c in enumerate(row):
+            if c == ".":
+                continue
+            if c not in "PNBRQKpnbrqk":
+                return None
+            if near == chess.WHITE:
+                sq = chess.square(j, 7 - i)
+            else:
+                sq = chess.square(7 - j, i)
+            seen[sq] = c
+    return seen
+
+
+def read_view(image, model):
+    """Returns (near_colour, {square: symbol}) or None."""
+    import json
     out = subprocess.run(
-        ["claude", "-p", prompt, "--model", model, "--allowedTools=Read"],
+        ["claude", "-p", VIEW_PROMPT.format(image=image), "--model", model,
+         "--allowedTools=Read"],
         capture_output=True, text=True, check=False, timeout=120)
-    m = re.search(r"([pnbrqkPNBRQK1-8]{1,8}/){7}[pnbrqkPNBRQK1-8]{1,8}", out.stdout)
-    return m.group(0) if m else None
+    m = re.search(r"\{.*\}", out.stdout, re.S)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except ValueError:
+        return None
+    if "rows" not in data:
+        return None
+    near = chess.BLACK if str(data.get("near", "")).lower() == "black" else chess.WHITE
+    seen = view_to_map([str(r) for r in data["rows"]], near)
+    return (near, seen) if seen is not None else None
+
+
+def placement_of(seen):
+    board = chess.Board(None)
+    for sq, c in seen.items():
+        board.set_piece_at(sq, chess.Piece.from_symbol(c))
+    return board.board_fen()
+
+
+def diff(board, seen):
+    """Squares where the board and the camera read disagree."""
+    return sum(1 for sq in chess.SQUARES
+               if (board.piece_at(sq).symbol() if board.piece_at(sq) else None) != seen.get(sq))
+
+
+def infer_moves(board, seen, tolerance=2):
+    """Find the move sequence (0 to 2 plies) that best explains what the camera
+    sees. A misread square or two is forgiven because the answer must also be
+    legal, which a raw read of the board cannot promise."""
+    best, best_score = [], diff(board, seen)
+    for m1 in board.legal_moves:
+        board.push(m1)
+        s1 = diff(board, seen)
+        if s1 < best_score:
+            best, best_score = [m1], s1
+        if s1 > 0:
+            for m2 in board.legal_moves:
+                board.push(m2)
+                s2 = diff(board, seen)
+                # A second ply has to earn its place, or noise invents moves.
+                if s2 < best_score - 1:
+                    best, best_score = [m1, m2], s2
+                board.pop()
+        board.pop()
+    return (best, best_score) if best_score <= tolerance else (None, best_score)
 
 
 def board_from_placement(placement, to_move):
@@ -420,19 +501,136 @@ class Game:
         path = os.path.join(tempfile.gettempdir(), "chessvoice-frame.png")
         if self.args.frame:
             path = self.args.frame
-        elif not capture_frame(path):
+        elif not capture_frame(path, self.args.window):
             return self.speak(self.p["no_window"])
         try:
-            placement = read_board(path, self.me, self.args.vision_model)
+            view = read_view(path, self.args.vision_model)
         finally:
             if not self.args.frame and os.path.exists(path):
                 os.remove(path)
-        board = board_from_placement(placement, self.me) if placement else None
+        board = board_from_placement(placement_of(view[1]), self.me) if view else None
         if board is None:
             return self.speak(self.p["no_board"])
         print(f"  read: {board.fen()}", flush=True)
         self.board = board
         self.next()
+
+
+class Watcher:
+    """Watch mode: the camera is the only input. Every read is explained as
+    legal moves from the tracked game; a move is committed once two reads in a
+    row agree, so a hand over the board mid-move changes nothing."""
+
+    START = chess.Board().board_fen()
+
+    def __init__(self, args, speaker):
+        self.args = args
+        self.p = PHRASES[args.lang]
+        self.speak = speaker.say
+        self.engine = chess.engine.SimpleEngine.popen_uci("stockfish")
+        self.engine.configure({"Skill Level": args.skill})
+        self.board, self.me = None, None
+        self.candidate, self.misses, self.last_miss = None, 0, None
+
+    def begin(self, near, seen):
+        self.me = near
+        if diff(chess.Board(), seen) <= 2:
+            self.board = chess.Board()
+        else:
+            self.board = board_from_placement(placement_of(seen), near)
+            if self.board is None:
+                return False
+        self.candidate, self.misses = None, 0
+        self.speak(self.p["ready"].format(color=self.p["white" if near else "black"]))
+        self.next()
+        return True
+
+    def next(self):
+        if self.board.is_checkmate():
+            return self.speak(self.p["mate"])
+        if self.board.is_game_over(claim_draw=True):
+            return self.speak(self.p["draw"])
+        if self.board.turn == self.me:
+            move = self.engine.play(self.board, chess.engine.Limit(time=self.args.think)).move
+            self.speak(self.p["play"].format(move=describe(self.board, move, self.args.lang)))
+
+    def step(self, view):
+        near, seen = view
+        if self.board is None:
+            return self.begin(near, seen)
+        # Pieces set up again: a new game, and the player may have switched sides.
+        if len(self.board.move_stack) > 4 and diff(chess.Board(), seen) <= 2:
+            return self.begin(near, seen)
+        moves, score = infer_moves(self.board, seen)
+        if moves is None:
+            placement = placement_of(seen)
+            self.misses += 1
+            print(f"  no legal explanation ({score} squares off), miss {self.misses}", flush=True)
+            # The game has drifted beyond repair: trust the camera, but only a
+            # read that repeats, since one bad read must not rewrite the game.
+            if self.misses >= 4 and placement == self.last_miss:
+                board = board_from_placement(placement, self.me)
+                if board is not None:
+                    print(f"  resync: {board.fen()}", flush=True)
+                    self.board, self.misses = board, 0
+                    self.next()
+            self.last_miss = placement
+            return
+        self.misses = 0
+        if not moves:
+            self.candidate = None
+            return
+        key = [m.uci() for m in moves]
+        if key != self.candidate:
+            self.candidate = key
+            print(f"  saw {' '.join(key)}, waiting for a second read", flush=True)
+            return
+        self.candidate = None
+        for m in moves:
+            self.board.push(m)
+        print(f"  moved {' '.join(key)}: {self.board.fen()}", flush=True)
+        self.next()
+
+
+def pin_call_input(device):
+    """Make the reply device the system input, so the call app hears the coach.
+    macOS falls back to the built-in microphone after a restart or a device
+    change, and the call then carries room noise instead of the moves."""
+    tool = os.path.join(HERE, "tools", "setinput")
+    if not os.path.exists(tool):
+        subprocess.run(["swiftc", "-O", tool + ".swift", "-o", tool], check=False)
+    subprocess.run([tool, device], check=False)
+
+
+def watch(args, speaker):
+    if args.out_device:
+        pin_call_input(args.out_device)
+    w = Watcher(args, speaker)
+    path = os.path.join(tempfile.gettempdir(), "chessvoice-watch.png")
+    try:
+        while True:
+            t0 = time.time()
+            if args.frame:
+                path = args.frame
+            elif not capture_frame(path, args.window):
+                print("  no call window", flush=True)
+                time.sleep(3)
+                continue
+            try:
+                view = read_view(path, args.vision_model)
+            finally:
+                if not args.frame and os.path.exists(path):
+                    os.remove(path)
+            print(f"read in {time.time() - t0:.1f}s", flush=True)
+            if view is None:
+                print("  board not readable", flush=True)
+            else:
+                w.step(view)
+            time.sleep(max(0.0, args.interval - (time.time() - t0)))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        w.engine.quit()
 
 
 def main():
@@ -446,10 +644,18 @@ def main():
     ap.add_argument("--think", type=float, default=1.0, help="engine seconds per move")
     ap.add_argument("--skill", type=int, default=20, help="Stockfish skill 0-20")
     ap.add_argument("--vision-model", default="sonnet")
-    ap.add_argument("--frame", help="read the board from this image instead of WhatsApp")
+    ap.add_argument("--frame", help="read the board from this image instead of the call")
+    ap.add_argument("--window", default=CALL_WINDOW,
+                    help="regex for the call window's app or title")
+    ap.add_argument("--watch", action="store_true",
+                    help="read moves from the camera; no listening")
+    ap.add_argument("--interval", type=float, default=4.0,
+                    help="watch mode: least seconds between board reads")
     ap.add_argument("--type", action="store_true", help="type commands instead of speaking")
     args = ap.parse_args()
 
+    if args.watch:
+        return watch(args, Speaker(args.lang, args.out_device, None, 0))
     listener = None if args.type else Listener(args.in_device)
     # Same device in and out means the assistant would transcribe its own voice.
     speaker = Speaker(args.lang, args.out_device, listener, args.echo_guard)
